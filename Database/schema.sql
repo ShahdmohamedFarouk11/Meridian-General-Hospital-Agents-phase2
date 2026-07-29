@@ -67,7 +67,7 @@ CREATE TABLE ICU_Beds (
     status VARCHAR(20)
         DEFAULT 'Available'
         CHECK (status IN ('Available','Occupied','Maintenance')),
-    patient_id INT UNIQUE NULL,
+    patient_id INT NULL,
 
     CONSTRAINT FK_Bed_Patient
         FOREIGN KEY (patient_id)
