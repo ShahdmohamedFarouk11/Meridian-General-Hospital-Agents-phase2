@@ -1,15 +1,18 @@
 import sys
+import asyncio
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from mcp.server import MCPServer
-import asyncio
+
 # ------------------------------------------------------
 # 1. Database Helpers Import (Fallback Handling)
 # ------------------------------------------------------
 try:
-    import db.database as db
+    import db_helpers as db
+    print("Successfully connected to db_helpers!", file=sys.stderr)
 except ImportError:
     db = None
+    print("Running in Mock Mode (db_helpers not found)", file=sys.stderr)
 
 # ------------------------------------------------------
 # 2. FastMCP Server Initialization
@@ -179,4 +182,4 @@ def triage_patient_prompt(patient_name: str, age: int, symptoms: str) -> str:
 # 7. Execution Entry Point
 # ------------------------------------------------------
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio")
