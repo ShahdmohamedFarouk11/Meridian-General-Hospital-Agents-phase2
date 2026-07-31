@@ -1,20 +1,37 @@
 # Meridian Hospital Network — MCP Server Lab
 
-**Company:** Meridian Hospital Network *(fictional two-hospital regional group: MediCore Downtown, MediCore North)*
-
-## Problem
-
-Front-desk staff currently phone each ICU or Operating Room desk to find available resources, then manually update admissions in a shared spreadsheet. During busy periods, staff have started relying on general-purpose AI assistants to check availability and update records directly.
-
-Allowing an LLM to interact with a hospital database without restrictions creates serious risks. An ICU bed could be double-booked, an operating room reassigned without authorization, or a patient's status accidentally changed through an unsafe model action.
-
-To prevent these failures, we implemented an MCP server between the AI agent and the hospital database. The model can freely retrieve information, but every state-changing operation is performed only through typed MCP tools with server-side validation, authorization, and—when appropriate—human confirmation.
-
-This README documents **Member 3's contribution**, which includes the MCP client (agent), Human-in-the-Loop integration, protocol features, end-to-end testing, and demonstration.
+**Company:** Meridian Hospital Network
+*(fictional two-hospital regional group: MediCore Downtown, MediCore North)*
 
 ---
 
-# Repository Layout
+## Problem
+
+Front-desk and hospital staff currently rely on manual communication to check available resources such as ICU beds and operating rooms, then update patient admission information manually.
+
+During busy periods, staff may use general-purpose AI assistants to retrieve hospital information or perform database updates.
+
+Allowing an AI model to directly interact with a hospital database without restrictions creates serious risks:
+
+- Assigning an unavailable ICU bed.
+- Updating patient information incorrectly.
+- Modifying hospital resources without authorization.
+- Performing unsafe write operations.
+
+To prevent these failures, we implemented an **MCP server** between the AI agent and the hospital database.
+
+The model can retrieve information through controlled read-only tools, while every write operation is performed through typed MCP tools with:
+
+- Server-side validation.
+- JSON Schema validation.
+- Authorization checks.
+- Business rule enforcement.
+
+This README documents **Member 3's contribution**, including MCP client integration, MCP protocol features, testing, and demonstration.
+
+---
+
+## Repository Layout
 
 ```text
 .
@@ -35,256 +52,346 @@ This README documents **Member 3's contribution**, which includes the MCP client
 │   └── seed.sql
 │
 └── mcp_server/
-    ├── db_helpers.py
     ├── MCP.py
-    └── mock_server.py
+    ├── db_helpers.py
+    ├── mock_server.py
+    ├── schemas.py
+    └── validation.py
 ```
 
 ---
 
-# Running the Project
+## MCP Server Components
+
+### MCP.py
+
+Main MCP server implementation.
+
+Responsibilities:
+
+- Define MCP tools.
+- Handle database operations.
+- Apply validation rules.
+- Expose MCP resources and prompts.
+
+### schemas.py
+
+Contains JSON Schemas used for validating MCP tool inputs.
+
+Includes schemas for:
+
+- Patient registration.
+- Patient status updates.
+- Admissions.
+- ICU bed assignments.
+- Operating room status updates.
+
+### validation.py
+
+Responsible for security and business rule validation.
+
+Includes:
+
+- Authorization checks.
+- Patient validation.
+- ICU assignment validation.
+- Admission validation.
+- Operating room validation.
+
+### db_helpers.py
+
+Database helper functions responsible for communication with the hospital database layer.
+
+### mock_server.py
+
+Mock MCP server used for end-to-end testing without requiring a real database connection.
+
+---
+
+## Running the Project
 
 ```bash
 cd agent
+
 pip install -r ../requirements.txt
 
 python test_e2e.py
+
 python agent.py --demo
+
 python agent.py
 ```
 
-If `ANTHROPIC_API_KEY` is not configured, the client automatically uses an offline deterministic planner together with a sampling stub, allowing all MCP protocol features to run locally.
+If `ANTHROPIC_API_KEY` is not configured, the client automatically uses an offline deterministic planner and sampling stub.
 
-If the API key is available, Claude is used for tool selection and sampling.
-
----
-
-# MCP Tools
-
-| Tool | Type | Doctor Authentication | Human Confirmation | Purpose |
-|------|------|----------------------|-------------------|---------|
-| `get_patient` | Read | No | No | Retrieve patient information |
-| `list_available_icu_beds` | Read | No | No | List available ICU beds |
-| `list_available_operating_rooms` | Read | No | No | List available operating rooms |
-| `list_hospitals_with_available_icu` | Read | No | No | Scan hospitals while reporting progress |
-| `login_as_doctor` | Write | No | No | Authenticate doctor and unlock write tools |
-| `reserve_icu_bed` | Write | Yes | Last ICU bed only | Prevent unsafe ICU allocation |
-| `reserve_operating_room` | Write | Yes | When reassigning a reserved room | Prevent silent operating room reassignment |
-| `create_admission` | Write | Yes | Uses Sampling | Creates admission and generates justification |
-| `update_patient_status` | Write | Yes | Only for irreversible states | Protect critical patient status updates |
+If the API key is available, Claude is used for model-based tool selection and sampling.
 
 ---
 
-# Capability Negotiation
+## MCP Tools
 
-During initialization the client requests the server capabilities:
+| Tool | Type | Authentication | Human Confirmation | Purpose |
+|---|---|---|---|---|
+| `get_patient_details` | Read | None | No | Retrieve complete patient information by ID |
+| `get_available_icu_beds` | Read | None | No | Retrieve available ICU beds |
+| `get_hospital_capacity` | Read | None | No | Check hospital capacity information |
+| `register_patient` | Write | Admin | No | Register a new patient |
+| `update_patient_status` | Write | Doctor | Policy dependent | Update patient medical status |
+| `create_admission` | Write | Doctor | No | Create admission record |
+| `manage_icu_bed` | Write | Doctor | Yes for sensitive assignments | Assign or release ICU beds |
+| `update_operating_room_status` | Write | Admin | No | Update operating room status |
 
+---
+
+## Capability Negotiation
+
+During MCP initialization, the client exchanges capabilities with the server.
+
+Supported capabilities:
+
+- Tools
+- Resources
+- Prompts
 - Elicitation
 - Sampling
-- Notifications
+- Progress Notifications
 
-The returned capabilities are stored by the agent and checked before using protocol features.
+The client stores server capabilities and checks availability before using optional MCP features.
+
+Example:
 
 ```python
 agent.supports("elicitation")
 agent.supports("sampling")
 ```
 
-If a capability is unavailable, the client safely avoids depending on it.
-
 ---
 
-# MCP Features Implemented
+## MCP Features Implemented
 
 ### Capability Negotiation
 
-The client exchanges capabilities during `initialize` and stores them for later use.
+The client exchanges capabilities during the MCP initialize phase.
 
----
+The server responds with supported features and the client adapts its behavior accordingly.
 
 ### Notifications
 
-After doctor authentication the server sends:
+The server supports progress notifications for long-running operations.
+
+Example:
 
 ```
-notifications/tools/list_changed
+notifications/progress
 ```
 
-The client refreshes the tool list automatically instead of polling continuously.
+Used to provide updates while checking hospital resources.
 
----
+Example:
+
+```
+Checking ICU beds...
+```
 
 ### Elicitation (Human-in-the-Loop)
 
-Critical write operations pause execution until the user explicitly confirms.
+Sensitive operations require explicit user confirmation before execution.
 
-Examples include:
+Example:
 
-- Reserving the last ICU bed.
-- Reassigning an operating room.
-- Setting a patient status to **deceased**.
-- Setting a patient status to **discharged_against_medical_advice**.
+```
+Confirm ICU bed assignment?
+```
 
----
+Implemented for:
+
+- ICU bed assignment using `manage_icu_bed`.
+- Critical resource allocation operations.
+
+This prevents unsafe automatic modifications.
 
 ### Sampling
 
-Instead of allowing the server to generate text, the server requests the **client's model** to create a short admission justification.
+The server can request the client model to generate content.
 
-Without an API key, an offline stub is used.
+Example:
 
----
+```
+sampling/createMessage
+```
+
+Used for AI-generated admission-related text.
+
+If no API key exists, an offline sampling stub is used.
 
 ### Resources
 
-Hospital policy documents are exposed as MCP Resources instead of tools.
+Hospital policies are exposed as MCP Resources instead of tools.
 
-Example:
+Available resources:
 
-```
-policy://icu-admission
-```
+- `triage://protocols/guidelines`
 
----
+  Emergency triage guidelines.
+
+- `hospital://operating-rooms/rules`
+
+  Operating room rules and policies.
 
 ### Prompts
 
-Parameterized prompt templates are retrieved through:
+Parameterized prompts are available through MCP prompts.
 
-```
-prompts/get
-```
+Available prompt:
 
-Example:
+- `triage_patient_prompt`
 
-```
-triage_summary_for_admission
-```
+  Purpose:
 
----
-
-### Progress Notifications
-
-Long-running operations continuously report progress.
-
-Example:
-
-```
-Checking MediCore Downtown...
-Checking MediCore North...
-```
-
-instead of leaving the client waiting silently.
-
----
+  - Analyze patient urgency.
+  - Use hospital guidelines.
+  - Select suitable MCP tools.
 
 ### Defensive Tool Design
 
-The server enforces business rules beyond JSON Schema validation.
+The MCP server applies multiple protection layers.
+
+**Input Validation**
+
+Implemented using:
+
+- Pydantic models.
+- JSON Schema validation.
+
+**Authorization**
+
+Write operations require proper authorization.
 
 Examples:
 
-- Write tools require doctor authentication.
-- Occupied ICU beds cannot be reserved.
-- Invalid patient IDs are rejected.
-- Irreversible operations require explicit confirmation.
+- Doctors can update patient medical information.
+- Admin users can register patients and manage operating room status.
 
----
+**Business Rules**
+
+The server validates:
+
+- Patient IDs.
+- Allowed patient statuses.
+- ICU bed assignments.
+- Admission data.
+- Operating room states.
 
 ### Transport
 
-The client communicates with the mock server through **stdio**, matching the MCP development workflow.
+The MCP client communicates with the mock server through:
+
+- stdio
+
+This follows the MCP local development workflow.
 
 ---
 
-# Demo
+## Demo
 
-```text
 Server capabilities:
+
+```json
 {
-  "tools": {"listChanged": true},
+  "tools": {
+    "listChanged": true
+  },
   "elicitation": {},
-  "sampling": {}
+  "sampling": {},
+  "progress": {}
 }
-
-Tools visible before login:
-
-get_patient
-list_available_icu_beds
-list_available_operating_rooms
-list_hospitals_with_available_icu
-
-USER:
-Log me in as the doctor on call
-
-Authenticated as doctor D001.
-Write tools unlocked.
-
-USER:
-Which hospitals currently have available ICU beds?
-
-Checking MediCore Downtown...
-Checking MediCore North...
-
-Result:
-["MediCore Downtown","MediCore North"]
-
-USER:
-Reserve an ICU bed for the patient
-
-Human confirmation requested:
-This is the LAST available ICU bed at MediCore North.
-
-Reservation completed.
-
-USER:
-Create the admission
-
-Admission A001 created successfully.
-
-Justification generated using the client's model.
 ```
 
+Available Tools:
+
+```
+get_patient_details
+get_available_icu_beds
+get_hospital_capacity
+register_patient
+update_patient_status
+create_admission
+manage_icu_bed
+update_operating_room_status
+```
+
+**USER:**
+Register a new patient
+
+**Result:**
+Patient registered successfully.
+
+**USER:**
+Get patient details
+
+**Result:**
+Patient details retrieved successfully.
+
+**USER:**
+Check available ICU beds
+
+**Result:**
+Available ICU beds returned successfully.
+
+**USER:**
+Assign ICU bed to patient
+
+Human confirmation requested:
+
+```
+Confirm ICU bed assignment?
+```
+
+**Result:**
+ICU bed assigned successfully.
+
+**USER:**
+Create admission
+
+**Result:**
+Admission created successfully.
+
+Sampling request completed when supported.
+
 ---
 
-# End-to-End Tests
+## End-to-End Tests
 
-Running
+Run:
 
 ```bash
 python test_e2e.py
 ```
 
-produces:
+Expected output:
 
-```text
+```
 PASS: Capability Negotiation
-
 PASS: Notifications
-
 PASS: Human Confirmation
-
 PASS: Resources
-
 PASS: Prompts
-
 PASS: Progress Tracking
-
 PASS: Defensive Tool Design
-
 PASS: Sampling
 
-11/11 tests passed
+All tests passed
 ```
 
 ---
 
-# Production Considerations
+## Production Considerations
 
-Although the prototype demonstrates all required MCP protocol concepts, several production improvements would still be necessary:
+Although this prototype demonstrates MCP protocol concepts, production deployment would require:
 
-- Replace the shared doctor session with secure authentication (JWT or similar).
-- Support multiple simultaneous confirmation requests.
-- Replace the offline sampling stub with a production model.
-- Record audit logs for every write operation.
-- Integrate with a real hospital database instead of the mock server.
+- Secure authentication (JWT or similar).
+- Complete audit logging for every write operation.
+- Support for multiple simultaneous confirmation requests.
+- Production-grade model integration.
+- Connection with a real hospital database.
+- Additional security monitoring.
