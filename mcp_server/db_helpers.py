@@ -4,22 +4,17 @@ import re
 import sys
 import io
 
-# إجبار Python على استخدام ترميز UTF-8 مع الـ stdout والـ stderr لتفادي مشاكل cp1256 في Windows
 if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 if sys.stderr and sys.stderr.encoding and sys.stderr.encoding.lower() != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# BASE_DIR هو مجلد mcp_server
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ROOT_DIR هو المجلد الرئيسي للمشروع (الرجوع خطوة للخلف)
 ROOT_DIR = os.path.dirname(BASE_DIR)
 
-# المسار الصحيح لمجلد db الموجود في الجذر الرئيسي
 DB_DIR = os.path.join(ROOT_DIR, "db")
 
-# مسارات الملفات داخل مجلد db
 DB_PATH = os.path.join(DB_DIR, "meridian_hospital.db")
 SCHEMA_PATH = os.path.join(DB_DIR, "schema.sql")
 SEED_PATH = os.path.join(DB_DIR, "seed.sql")
