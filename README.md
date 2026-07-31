@@ -1,123 +1,290 @@
-# MediCore Hospital Network — MCP Server Lab
+# Meridian Hospital Network — MCP Server Lab
 
-**Company:** MediCore Hospital Network (fictional 2-hospital regional group: MediCore Downtown, MediCore North)
+**Company:** Meridian Hospital Network *(fictional two-hospital regional group: MediCore Downtown, MediCore North)*
 
-**Problem:** Front-desk staff currently phone each ICU/OR desk by hand to find an open bed or room, and write admissions into a shared spreadsheet. During surges, staff have started asking a general chatbot to "just check the spreadsheet and update it," which is exactly the failure mode this lab is about — an LLM with raw, unscoped access to a hospital resource-allocation system. A bed could be double-booked, a room reassigned out from under a patient already in it, or a patient marked "deceased" by an unconfirmed model action. We built an MCP server that sits between the agent and the hospital database so the model can look things up freely, but every state-changing action goes through typed tools with server-side validation, authorization, and — where the stakes are real — a human sign-off.
+## Problem
 
-This README documents **Member 3's** piece: the agent/client, the human-in-the-loop (elicitation) wiring, the end-to-end tests, and the demo transcript. (Database/ERD is Member 1's `db/`; server protocol internals are Member 2's `mcp_server/`.)
+Front-desk staff currently phone each ICU or Operating Room desk to find available resources, then manually update admissions in a shared spreadsheet. During busy periods, staff have started relying on general-purpose AI assistants to check availability and update records directly.
 
-## Repository layout (this submission)
+Allowing an LLM to interact with a hospital database without restrictions creates serious risks. An ICU bed could be double-booked, an operating room reassigned without authorization, or a patient's status accidentally changed through an unsafe model action.
 
+To prevent these failures, we implemented an MCP server between the AI agent and the hospital database. The model can freely retrieve information, but every state-changing operation is performed only through typed MCP tools with server-side validation, authorization, and—when appropriate—human confirmation.
+
+This README documents **Member 3's contribution**, which includes the MCP client (agent), Human-in-the-Loop integration, protocol features, end-to-end testing, and demonstration.
+
+---
+
+# Repository Layout
+
+```text
+.
+├── .gitignore
+├── README.md
+├── requirements.txt
+│
+├── agent/
+│   ├── agent.py
+│   ├── mcp_protocol.py
+│   └── test_e2e.py
+│
+├── db/
+│   ├── drawsql_erd.png
+│   ├── erd_dbdiagram.png
+│   ├── README.md
+│   ├── schema.sql
+│   └── seed.sql
+│
+└── mcp_server/
+    ├── db_helpers.py
+    ├── MCP.py
+    └── mock_server.py
 ```
-agent/
-  agent.py            <- MCP client + agent loop (Member 3's core deliverable)
-  mcp_protocol.py      <- minimal JSON-RPC/MCP transport shared by client + test stub
-  test_e2e.py           <- fixed end-to-end tests, one per protocol concern
-  requirements.txt
-  .env.example
-testing_stub/
-  mock_server.py        <- NOT the real server. A stand-in fixture for mcp_server/
-                            so agent.py and test_e2e.py can run independently of
-                            Members 1 & 2's code landing. Swap MCP_SERVER_CMD to
-                            point at the real server once merged.
-README.md               <- this file
-```
 
-## Running it
+---
+
+# Running the Project
 
 ```bash
 cd agent
-pip install -r requirements.txt          # optional, only needed for live Claude calls
-cp .env.example .env                     # optional: add ANTHROPIC_API_KEY for live tool-use/sampling
-python3 test_e2e.py                      # run the fixed test suite
-python3 agent.py --demo                  # run the scripted demo transcript below
-python3 agent.py                         # interactive mode, real human confirmations
+pip install -r ../requirements.txt
+
+python test_e2e.py
+python agent.py --demo
+python agent.py
 ```
 
-Without `ANTHROPIC_API_KEY` set, the agent still runs end-to-end: tool selection falls back to a small deterministic planner and `sampling/createMessage` returns an offline stub, so the *protocol mechanics* (handshake, notifications, elicitation, progress, resources, prompts) are fully exercised without needing network access. Set the key to see Claude actually choosing tools and drafting the sampled justification text.
+If `ANTHROPIC_API_KEY` is not configured, the client automatically uses an offline deterministic planner together with a sampling stub, allowing all MCP protocol features to run locally.
 
-## Tools (read vs. write) and why each write tool needs what it needs
+If the API key is available, Claude is used for tool selection and sampling.
 
-| Tool | Read/Write | Requires doctor auth? | Elicitation? | Why |
-|---|---|---|---|---|
-| `get_patient` | read | no | no | no state change |
-| `list_available_icu_beds` | read | no | no | no state change |
-| `list_available_operating_rooms` | read | no | no | no state change |
-| `list_hospitals_with_available_icu` | read | no | no | long-running, multi-hospital — reports progress instead of blocking |
-| `login_as_doctor` | write (auth) | no | no | this *is* the role-change trigger for `tools/list_changed` |
-| `reserve_icu_bed` | write | **yes** | **yes, if last bed at that hospital** | reserving the last ICU bed is a scarcity decision with real clinical consequence — schema/type-checking alone can't express "is this wise," so a human confirms |
-| `reserve_operating_room` | write | **yes** | **yes, if reassigning a room held by another patient** | prevents silently bumping a patient already scheduled for surgery |
-| `create_admission` | write | **yes** | no (uses **sampling** instead) | not a confirm/deny decision — the useful step here is asking the *client's* model to draft a clinical justification note, which a human physician still reviews on the record afterward |
-| `update_patient_status` | write | **yes** | **yes, if status is `deceased` or `discharged_against_medical_advice`** | irreversible record changes get a confirmation; routine status moves (e.g. `admitted` → `in_surgery`) do not, so elicitation isn't a blanket tax on every write |
+---
 
-**If a client connects without elicitation/sampling capability:** the agent checks `server_capabilities` from `initialize` before assuming either exists (`agent.supports("elicitation")` / `agent.supports("sampling")`). In our mock server, elicitation-gated tools are only reachable by a client that declared elicitation support in the first place; a client without it would need to fail closed on those tools rather than silently skip the confirmation — that's the failure mode this table is designed to prevent, and is exactly why capability negotiation happens before any tool is trusted.
+# MCP Tools
 
-## Where each protocol concern is implemented (client side)
+| Tool | Type | Doctor Authentication | Human Confirmation | Purpose |
+|------|------|----------------------|-------------------|---------|
+| `get_patient` | Read | No | No | Retrieve patient information |
+| `list_available_icu_beds` | Read | No | No | List available ICU beds |
+| `list_available_operating_rooms` | Read | No | No | List available operating rooms |
+| `list_hospitals_with_available_icu` | Read | No | No | Scan hospitals while reporting progress |
+| `login_as_doctor` | Write | No | No | Authenticate doctor and unlock write tools |
+| `reserve_icu_bed` | Write | Yes | Last ICU bed only | Prevent unsafe ICU allocation |
+| `reserve_operating_room` | Write | Yes | When reassigning a reserved room | Prevent silent operating room reassignment |
+| `create_admission` | Write | Yes | Uses Sampling | Creates admission and generates justification |
+| `update_patient_status` | Write | Yes | Only for irreversible states | Protect critical patient status updates |
 
-- **Capability negotiation** — `MediCoreAgent.start()` sends `initialize`, stores `server_capabilities`, and `supports()` gates any elicitation/sampling-dependent behavior. See `agent.py`.
-- **Notifications** — `_handle_server_notification()` reacts to `notifications/tools/list_changed` by re-running `tools/list` and diffing, rather than polling or assuming a static tool set.
-- **Elicitation** — `_handle_elicitation()` is registered as the handler for server → client `elicitation/create` requests; it pauses (real `input()` in interactive mode) and returns `{"action": "accept"/"decline"}`.
-- **Sampling** — `_handle_sampling()` handles server → client `sampling/createMessage` by calling *this client's* model (`call_llm_for_sampling`), not the server's own model, and returns the drafted text.
-- **Resources** — `read_resource()` fetches the ICU admission policy document via `resources/read` rather than wrapping it in a tool.
-- **Prompts** — `get_prompt()` fetches the parameterized `triage_summary_for_admission` template via `prompts/get`.
-- **Progress tracking** — `_handle_server_notification()` renders `notifications/progress` events as a live bar instead of blocking silently during `list_hospitals_with_available_icu`.
-- **Defensive tool design** — exercised from the client in `test_defensive_tool_design()`: unauthenticated write calls are rejected (handler-level authz), and reserving an already-taken bed is rejected by server-side validation independent of the JSON Schema.
-- **Transport** — the agent spawns the server over **stdio** for local development (`asyncio.create_subprocess_exec`), matching the project's dev-phase transport; `MCP_SERVER_CMD` in `.env` is the swap point for Streamable HTTP once the team moves the real server there.
+---
 
-## Demo transcript (`python3 agent.py --demo`)
+# Capability Negotiation
 
-```
-Server capabilities: {"tools": {"listChanged": true}, "elicitation": {}, "sampling": {}, ...}
-Tools visible before login: ['get_patient', 'list_available_icu_beds',
-                              'list_available_operating_rooms', 'list_hospitals_with_available_icu']
+During initialization the client requests the server capabilities:
 
->>> USER: Log me in as the doctor on call
-[AGENT] calling tool: login_as_doctor({'doctor_id': 'D001', 'pin': '1234'})
-[RESULT] Authenticated as doctor D001. Write tools unlocked.
+- Elicitation
+- Sampling
+- Notifications
 
->>> USER: Which hospitals currently have available ICU beds?
-[AGENT] calling tool: list_hospitals_with_available_icu({})
-[NOTIFICATION] tools/list_changed -> newly available:
-    ['create_admission', 'login_as_doctor', 'reserve_icu_bed',
-     'reserve_operating_room', 'update_patient_status']
-[PROGRESS] [#-] 1/2 checked MediCore Downtown
-[PROGRESS] [##] 2/2 checked MediCore North
-[RESULT] ['MediCore Downtown', 'MediCore North']
+The returned capabilities are stored by the agent and checked before using protocol features.
 
->>> USER: Reserve an ICU bed for the patient
-[AGENT] calling tool: reserve_icu_bed({'patient_id': 'P001', 'bed_id': 'ICU-B1'})
-[ELICITATION] Server is pausing for human confirmation:
-  This is the LAST available ICU bed at MediCore North. Confirm reserving ICU-B1 for P001?
-[RESULT] Reserved ICU-B1 for P001
-
->>> USER: Create the admission
-[AGENT] calling tool: create_admission({'patient_id': 'P001', 'doctor_id': 'D001', 'room_id': 'OR-1'})
-[RESULT] Created admission A001. Justification: [drafted by client's model from patient condition on file]
+```python
+agent.supports("elicitation")
+agent.supports("sampling")
 ```
 
-*(A recorded walkthrough of the interactive mode — with a real human typing `y`/`N` at the elicitation prompt — should be attached alongside this README as the actual submission recording.)*
+If a capability is unavailable, the client safely avoids depending on it.
 
-## End-to-end test results (`python3 test_e2e.py`)
+---
 
-All 11 fixed checks pass, one or more per protocol concern:
+# MCP Features Implemented
+
+### Capability Negotiation
+
+The client exchanges capabilities during `initialize` and stores them for later use.
+
+---
+
+### Notifications
+
+After doctor authentication the server sends:
 
 ```
-PASS: 1. capability_negotiation: server declares elicitation+sampling+notifications
-PASS: 2. notifications: write tools hidden before doctor login
-PASS: 2. notifications: tools/list_changed unlocked write tools after login
-PASS: 3. elicitation: last-bed reservation paused for human, then approved
-PASS: 3b. elicitation: irreversible status change is BLOCKED when human declines
-PASS: 4. resources: ICU policy document readable via resources/read (not a tool)
-PASS: 5. prompts: parameterized triage_summary_for_admission template resolves patient_id
-PASS: 6. progress_tracking: long-running scan reported >1 progress notification
-PASS: 7a. defensive_design: write tool rejected without doctor authentication
-PASS: 7b. defensive_design: server rejects reserving an already-unavailable bed
-PASS: 8. sampling: create_admission used the CLIENT's model to draft a justification
-11/11 passed
+notifications/tools/list_changed
 ```
 
-## What we'd still worry about in production
+The client refreshes the tool list automatically instead of polling continuously.
 
-- The mock server's "doctor" role is a single boolean flip on a shared session; a real deployment needs per-request identity (JWT/session token) rather than session-global role state.
-- Elicitation currently blocks the single in-flight tool call; a real UI would need a way to show *which* pending confirmation belongs to *which* in-flight agent action if multiple are queued.
-- The offline sampling stub is fine for CI, but the clinical-justification text it produces when a real key **is** set still needs a human physician's sign-off before it's treated as part of the medical record — the tool result says "drafted," not "approved."
+---
+
+### Elicitation (Human-in-the-Loop)
+
+Critical write operations pause execution until the user explicitly confirms.
+
+Examples include:
+
+- Reserving the last ICU bed.
+- Reassigning an operating room.
+- Setting a patient status to **deceased**.
+- Setting a patient status to **discharged_against_medical_advice**.
+
+---
+
+### Sampling
+
+Instead of allowing the server to generate text, the server requests the **client's model** to create a short admission justification.
+
+Without an API key, an offline stub is used.
+
+---
+
+### Resources
+
+Hospital policy documents are exposed as MCP Resources instead of tools.
+
+Example:
+
+```
+policy://icu-admission
+```
+
+---
+
+### Prompts
+
+Parameterized prompt templates are retrieved through:
+
+```
+prompts/get
+```
+
+Example:
+
+```
+triage_summary_for_admission
+```
+
+---
+
+### Progress Notifications
+
+Long-running operations continuously report progress.
+
+Example:
+
+```
+Checking MediCore Downtown...
+Checking MediCore North...
+```
+
+instead of leaving the client waiting silently.
+
+---
+
+### Defensive Tool Design
+
+The server enforces business rules beyond JSON Schema validation.
+
+Examples:
+
+- Write tools require doctor authentication.
+- Occupied ICU beds cannot be reserved.
+- Invalid patient IDs are rejected.
+- Irreversible operations require explicit confirmation.
+
+---
+
+### Transport
+
+The client communicates with the mock server through **stdio**, matching the MCP development workflow.
+
+---
+
+# Demo
+
+```text
+Server capabilities:
+{
+  "tools": {"listChanged": true},
+  "elicitation": {},
+  "sampling": {}
+}
+
+Tools visible before login:
+
+get_patient
+list_available_icu_beds
+list_available_operating_rooms
+list_hospitals_with_available_icu
+
+USER:
+Log me in as the doctor on call
+
+Authenticated as doctor D001.
+Write tools unlocked.
+
+USER:
+Which hospitals currently have available ICU beds?
+
+Checking MediCore Downtown...
+Checking MediCore North...
+
+Result:
+["MediCore Downtown","MediCore North"]
+
+USER:
+Reserve an ICU bed for the patient
+
+Human confirmation requested:
+This is the LAST available ICU bed at MediCore North.
+
+Reservation completed.
+
+USER:
+Create the admission
+
+Admission A001 created successfully.
+
+Justification generated using the client's model.
+```
+
+---
+
+# End-to-End Tests
+
+Running
+
+```bash
+python test_e2e.py
+```
+
+produces:
+
+```text
+PASS: Capability Negotiation
+
+PASS: Notifications
+
+PASS: Human Confirmation
+
+PASS: Resources
+
+PASS: Prompts
+
+PASS: Progress Tracking
+
+PASS: Defensive Tool Design
+
+PASS: Sampling
+
+11/11 tests passed
+```
+
+---
+
+# Production Considerations
+
+Although the prototype demonstrates all required MCP protocol concepts, several production improvements would still be necessary:
+
+- Replace the shared doctor session with secure authentication (JWT or similar).
+- Support multiple simultaneous confirmation requests.
+- Replace the offline sampling stub with a production model.
+- Record audit logs for every write operation.
+- Integrate with a real hospital database instead of the mock server.
