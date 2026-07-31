@@ -1,21 +1,25 @@
 import sys
+import os
 import asyncio
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from mcp.server import MCPServer
 
+# تأكيد إضافة المسار الحالي لـ sys.path لضمان استيراد db_helpers
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 # ------------------------------------------------------
-# 1. Database Helpers Import (Fallback Handling)
+# 1. Database Helpers Import
 # ------------------------------------------------------
 try:
     import db_helpers as db
     print("Successfully connected to db_helpers!", file=sys.stderr)
-except ImportError:
+except Exception as e:
     db = None
-    print("Running in Mock Mode (db_helpers not found)", file=sys.stderr)
+    print(f"Running in Mock Mode (Error: {e})", file=sys.stderr)
 
 # ------------------------------------------------------
-# 2. FastMCP Server Initialization
+# 2. MCPServer Initialization
 # ------------------------------------------------------
 mcp = MCPServer("Meridian Hospital Triage MCP Server")
 
@@ -182,4 +186,4 @@ def triage_patient_prompt(patient_name: str, age: int, symptoms: str) -> str:
 # 7. Execution Entry Point
 # ------------------------------------------------------
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run()
