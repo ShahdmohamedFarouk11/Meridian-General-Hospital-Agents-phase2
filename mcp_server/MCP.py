@@ -3,8 +3,6 @@ from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from mcp.server import MCPServer
 import asyncio
-from mcp.server import MCPServer
-
 # ------------------------------------------------------
 # 1. Database Helpers Import (Fallback Handling)
 # ------------------------------------------------------
