@@ -5,7 +5,6 @@ from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from mcp.server import MCPServer
 
-# تأكيد إضافة المسار الحالي لـ sys.path لضمان استيراد db_helpers
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # ------------------------------------------------------
