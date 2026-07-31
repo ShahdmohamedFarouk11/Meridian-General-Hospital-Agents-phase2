@@ -257,7 +257,7 @@ def decide_next_tool_call(message):
     text = message.lower()
 
 
-    if "icu" in text:
+    if "icu beds" in text:
 
         return {
             "name": "get_available_icu_beds",
@@ -265,7 +265,17 @@ def decide_next_tool_call(message):
         }
 
 
-    if "admission" in text or "admit" in text:
+    if "patient details" in text:
+
+        return {
+            "name": "get_patient_details",
+            "arguments": {
+                "patient_id": 1
+            }
+        }
+
+
+    if "admission" in text:
 
         return {
             "name": "create_admission",
@@ -280,14 +290,25 @@ def decide_next_tool_call(message):
         }
 
 
-    return None
+    if "capacity" in text:
 
+        return {
+            "name": "get_hospital_capacity",
+            "arguments": {}
+        }
+
+
+    return None
 
 DEMO_SCRIPT = [
 
     "Which ICU beds are available?",
 
-    "Create admission"
+    "Get patient details",
+
+    "Create admission",
+
+    "Get hospital capacity"
 
 ]
 
