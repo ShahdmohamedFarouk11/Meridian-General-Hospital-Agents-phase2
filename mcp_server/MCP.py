@@ -7,7 +7,7 @@ import asyncio
 # 1. Database Helpers Import (Fallback Handling)
 # ------------------------------------------------------
 try:
-    import db_helpers as db
+    import db.database as db
 except ImportError:
     db = None
 
