@@ -16,8 +16,9 @@ from mcp_protocol import JsonRpcEndpoint  # noqa: E402
 
 DEFAULT_SERVER_ARGS = [
     sys.executable,
-    os.path.join(os.path.dirname(__file__), "..", "testing_stub", "mock_server.py"),
+    os.path.join(os.path.dirname(__file__), "..", "mcp_server", "mock_server.py"),
 ]
+
 # Point at real mcp_server when ready, e.g.:
 # MCP_SERVER_CMD="python3 ../mcp_server/MCP.py"
 SERVER_ARGS = os.environ.get("MCP_SERVER_CMD", "").split() or DEFAULT_SERVER_ARGS
